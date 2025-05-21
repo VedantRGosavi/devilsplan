@@ -276,8 +276,8 @@ struct GameCompleteView: View {
 
 #Preview {
     MemoryMatchView(
-        game: Game(id: "1", name: "Memory Match", description: "Test your memory", levels: 10, maxScore: 1000),
+        game: Game.preview,
         engine: MemoryMatchEngine()
     )
-    .environment(Clerk())
+    .environment(Clerk.shared)
 } 

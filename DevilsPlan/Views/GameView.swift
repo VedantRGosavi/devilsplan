@@ -1,15 +1,51 @@
 import SwiftUI
 import Clerk
 
-struct GameView: View {
+protocol GameView: View {
+    associatedtype Engine: GameProtocol
+    var game: Game { get }
+    var engine: Engine { get }
+    
+    func showTutorial()
+    func handleGameComplete()
+    func defaultGameNavigation() -> AnyView
+}
+
+extension GameView {
+    func defaultGameNavigation() -> AnyView {
+        AnyView(
+            VStack {
+                body
+            }
+            .navigationBarTitleDisplayMode(.inline)
+            .navigationBarBackButtonHidden(false)
+        )
+    }
+}
+
+struct GameContainerView: View {
     let game: Game
     @Environment(\.dismiss) private var dismiss
     
     var body: some View {
         Group {
-            if game.name == "Memory Match" {
-                MemoryMatchView(game: game)
-            } else {
+            switch game.id {
+            case "memory_match":
+                MemoryMatchView(
+                    game: game,
+                    engine: MemoryMatchEngine()
+                )
+            case "rules_race":
+                RulesRaceView(
+                    game: game,
+                    engine: RulesRaceEngine()
+                )
+            case "equation_high_low":
+                EquationHighLowView(
+                    game: game,
+                    engine: EquationHighLowEngine()
+                )
+            default:
                 VStack {
                     Text("Game: \(game.name)")
                         .font(.title)
@@ -29,7 +65,7 @@ struct GameView: View {
     }
 }
 
-struct TutorialView: View {
+struct GameTutorialContainerView: View {
     let game: Game
     @Environment(\.dismiss) private var dismiss
     
@@ -58,5 +94,6 @@ struct TutorialView: View {
 }
 
 #Preview {
-    GameView(game: Game(id: "1", name: "Memory Match", description: "Test your memory", levels: 10, maxScore: 1000))
+    GameContainerView(game: Game.preview)
+        .environment(Clerk.shared)
 } 

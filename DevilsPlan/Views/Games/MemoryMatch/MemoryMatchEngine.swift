@@ -1,4 +1,39 @@
+import SwiftUI
 import Foundation
+
+// Game-specific player type
+struct MemoryPlayer: GamePlayer {
+    let id: String
+    var name: String
+    var matchesFound: Int
+    var score: Int { matchesFound * 100 }
+    
+    init(id: String, name: String) {
+        self.id = id
+        self.name = name
+        self.matchesFound = 0
+    }
+}
+
+enum MemoryGameState {
+    case playing
+    case levelComplete
+    case gameComplete
+    case notStarted
+    
+    var toGameState: GameState {
+        switch self {
+        case .notStarted:
+            return .notStarted
+        case .playing:
+            return .playing
+        case .levelComplete:
+            return .levelComplete
+        case .gameComplete:
+            return .gameComplete
+        }
+    }
+}
 
 class MemoryMatchEngine: ObservableObject, GameProtocol {
     @Published private(set) var cards: [MemoryCard]
@@ -6,7 +41,11 @@ class MemoryMatchEngine: ObservableObject, GameProtocol {
     @Published private(set) var moves = 0
     @Published private(set) var currentLevel = 1
     @Published private(set) var matchesFound = 0
-    @Published var gameState: GameState = .notStarted
+    @Published var gameState: MemoryGameState = .notStarted
+    @Published var players: [MemoryPlayer] = []
+    @Published var currentPlayerIndex: Int = 0
+    @Published var winner: MemoryPlayer?
+    @Published var isMultiplayerGame: Bool = false
     
     var isMultiplayer: Bool { false }
     
@@ -16,13 +55,6 @@ class MemoryMatchEngine: ObservableObject, GameProtocol {
     private let timePenalty = 10
     private let movesPenalty = 5
     private var levelStartTime: Date?
-    
-    enum GameState {
-        case playing
-        case levelComplete
-        case gameComplete
-        case notStarted
-    }
     
     init(level: Int = 1) {
         self.currentLevel = level

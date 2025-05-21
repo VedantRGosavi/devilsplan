@@ -25,5 +25,5 @@ struct HomeView: View {
 
 #Preview {
     HomeView()
-        .environment(Clerk())
-} 
+        .environment(Clerk.shared)
+}

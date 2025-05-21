@@ -19,10 +19,7 @@ class RulesRaceMultiplayerManager: NSObject, ObservableObject {
         GKLocalPlayer.local.authenticateHandler = { [weak self] viewController, error in
             guard let self = self else { return }
             
-            if let viewController = viewController {
-                // Present the view controller if needed
-                print("Authentication required")
-            } else if let error = error {
+            if let error = error {
                 print("Error authenticating: \(error.localizedDescription)")
             } else {
                 self.isGameCenterEnabled = GKLocalPlayer.local.isAuthenticated
@@ -46,11 +43,12 @@ class RulesRaceMultiplayerManager: NSObject, ObservableObject {
         isMatchmaking = true
     }
     
-    func sendGameData(_ data: GameData) {
+    func sendGameData(_ data: RulesRaceGameData, type: String) {
         guard let match = match else { return }
         
         do {
-            let encodedData = try JSONEncoder().encode(data)
+            let gameData = MultiplayerGameData(type: type, data: data)
+            let encodedData = try JSONEncoder().encode(gameData)
             try match.sendData(toAllPlayers: encodedData, with: .reliable)
         } catch {
             print("Error sending game data: \(error.localizedDescription)")
@@ -99,33 +97,31 @@ extension RulesRaceMultiplayerManager: GKMatchDelegate {
     
     func match(_ match: GKMatch, didReceive data: Data, fromPlayer playerID: String) {
         do {
-            let gameData = try JSONDecoder().decode(GameData.self, from: data)
-            NotificationCenter.default.post(name: .gameDataReceived, object: gameData)
+            let gameData = try JSONDecoder().decode(MultiplayerGameData.self, from: data)
+            NotificationCenter.default.post(
+                name: NSNotification.Name("gameDataReceived"),
+                object: GameDataReceived(type: gameData.type, data: gameData.data)
+            )
         } catch {
             print("Error decoding game data: \(error.localizedDescription)")
         }
     }
 }
 
-// Game data structure for syncing
-struct GameData: Codable {
-    let type: GameDataType
-    let playerIndex: Int
-    let diceResult: String?
-    let position: Int?
-    let isInPrison: Bool?
-    let escapeTickets: Int?
-    let personalRules: [String]?
+// Game data structures for syncing
+struct MultiplayerGameData: Codable {
+    let type: String
+    let data: RulesRaceGameData
 }
 
-enum GameDataType: String, Codable {
-    case diceRoll
-    case playerMove
-    case customRule
-    case gameState
+/*
+struct GameDataReceived {
+    let type: String
+    let data: Data
 }
+*/
 
-// Notification name for game data
-extension Notification.Name {
-    static let gameDataReceived = Notification.Name("gameDataReceived")
+extension RulesRacePlayer {
+    var gamePlayerID: String { id }
+    var displayName: String { name }
 } 

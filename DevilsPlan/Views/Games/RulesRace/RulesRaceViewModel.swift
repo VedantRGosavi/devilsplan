@@ -1,6 +1,24 @@
 import SwiftUI
 import Combine
 import GameKit
+import Foundation
+
+enum RulesRaceState {
+    case notStarted
+    case playing
+    case finished
+    
+    var toGameState: GameState {
+        switch self {
+        case .notStarted:
+            return .notStarted
+        case .playing:
+            return .playing
+        case .finished:
+            return .gameComplete
+        }
+    }
+}
 
 enum DiceResult: String, CaseIterable {
     case one1 = "1"
@@ -12,12 +30,12 @@ enum DiceResult: String, CaseIterable {
 }
 
 class RulesRaceViewModel: ObservableObject {
-    @Published var players: [Player] = []
+    @Published var players: [RulesRacePlayer] = []
     @Published var currentPlayerIndex: Int = 0
     @Published var lastDiceRoll: String?
     @Published var isRolling: Bool = false
-    @Published var gameState: GameState = .notStarted
-    @Published var winner: Player?
+    @Published var gameState: RulesRaceState = .notStarted
+    @Published var winner: RulesRacePlayer?
     @Published var isMultiplayerGame: Bool = false
     
     private let multiplayerManager = RulesRaceMultiplayerManager.shared
@@ -57,23 +75,23 @@ class RulesRaceViewModel: ObservableObject {
             // Set up multiplayer game with connected players
             let connectedPlayers = multiplayerManager.connectedPlayers
             players = connectedPlayers.enumerated().map { index, player in
-                Player(id: player.gamePlayerID,
-                      name: player.displayName,
-                      position: 0,
-                      escapeTickets: 0)
+                RulesRacePlayer(id: player.gamePlayerID,
+                              name: player.displayName,
+                              position: 0,
+                              escapeTickets: 0)
             }
             // Add local player
-            players.append(Player(id: multiplayerManager.localPlayer.gamePlayerID,
-                                name: multiplayerManager.localPlayer.displayName,
-                                position: 0,
-                                escapeTickets: 0))
+            players.append(RulesRacePlayer(id: multiplayerManager.localPlayer.gamePlayerID,
+                                        name: multiplayerManager.localPlayer.displayName,
+                                        position: 0,
+                                        escapeTickets: 0))
         } else {
             // Set up local game with dummy players
             players = [
-                Player(id: UUID().uuidString, name: "Player 1", position: 0, escapeTickets: 0),
-                Player(id: UUID().uuidString, name: "Player 2", position: 0, escapeTickets: 0),
-                Player(id: UUID().uuidString, name: "Player 3", position: 0, escapeTickets: 0),
-                Player(id: UUID().uuidString, name: "Player 4", position: 0, escapeTickets: 0)
+                RulesRacePlayer(id: UUID().uuidString, name: "Player 1", position: 0, escapeTickets: 0),
+                RulesRacePlayer(id: UUID().uuidString, name: "Player 2", position: 0, escapeTickets: 0),
+                RulesRacePlayer(id: UUID().uuidString, name: "Player 3", position: 0, escapeTickets: 0),
+                RulesRacePlayer(id: UUID().uuidString, name: "Player 4", position: 0, escapeTickets: 0)
             ]
         }
         
@@ -221,21 +239,4 @@ class RulesRaceViewModel: ObservableObject {
             }
         }
     }
-}
-
-// Game state enum
-enum GameState {
-    case notStarted
-    case playing
-    case finished
-}
-
-// Player model
-struct Player: Identifiable {
-    let id: String
-    let name: String
-    var position: Int
-    var escapeTickets: Int
-    var isInPrison: Bool = false
-    var personalRules: [String] = []
 } 

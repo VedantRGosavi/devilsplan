@@ -2,7 +2,7 @@ import SwiftUI
 import Combine
 import MultipeerConnectivity
 
-class EquationHighLowGameService: NSObject {
+class EquationHighLowGameService: NSObject, ObservableObject {
     // MARK: - Properties
     private let serviceType = "eqn-high-low"
     private let myPeerId = MCPeerID(displayName: UIDevice.current.name)

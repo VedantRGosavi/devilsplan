@@ -105,5 +105,5 @@ struct StatCard: View {
 
 #Preview {
     ProfileView()
-        .environment(Clerk())
+        .environment(Clerk.shared)
 } 

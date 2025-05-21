@@ -1,5 +1,21 @@
 import SwiftUI
 import Combine
+import Foundation
+
+// Game-specific player type
+struct EquationPlayer: GamePlayer {
+    let id: String
+    var name: String
+    var currentGuess: Int?
+    var roundsWon: Int
+    var score: Int { roundsWon * 100 }
+    
+    init(id: String, name: String) {
+        self.id = id
+        self.name = name
+        self.roundsWon = 0
+    }
+}
 
 class EquationHighLowViewModel: ObservableObject {
     @Published var availableCards: [EquationCard] = []
@@ -7,10 +23,12 @@ class EquationHighLowViewModel: ObservableObject {
     @Published var currentPlayerChips = 100 // Starting chips
     @Published var bidAmount = 1
     @Published var canBid = false
-    @Published var gameState: GameState = .waitingForPlayers
-    @Published var players: [Player] = []
+    @Published var gameState: EquationGameState = .waitingForPlayers
+    @Published var players: [EquationPlayer] = []
     @Published var currentPlayerIndex = 0
-    @Published var roundWinner: Player?
+    @Published var roundWinner: EquationPlayer?
+    @Published var winner: EquationPlayer?
+    @Published var isMultiplayerGame: Bool = false
     
     var currentEquationResult: Double? {
         calculateEquationResult()
@@ -31,10 +49,10 @@ class EquationHighLowViewModel: ObservableObject {
         
         // Generate operator cards (+, -, *, /)
         let operatorCards = [
-            EquationCard(type: .operator, value: 0, display: "+", operation: .add),
-            EquationCard(type: .operator, value: 0, display: "-", operation: .subtract),
-            EquationCard(type: .operator, value: 0, display: "×", operation: .multiply),
-            EquationCard(type: .operator, value: 0, display: "÷", operation: .divide)
+            EquationCard(type: .operation, value: 0, display: "+", operation: .add),
+            EquationCard(type: .operation, value: 0, display: "-", operation: .subtract),
+            EquationCard(type: .operation, value: 0, display: "×", operation: .multiply),
+            EquationCard(type: .operation, value: 0, display: "÷", operation: .divide)
         ]
         
         availableCards = (numberCards + operatorCards).shuffled()
@@ -49,7 +67,7 @@ class EquationHighLowViewModel: ObservableObject {
             .store(in: &cancellables)
     }
     
-    private func handleGameState(_ state: GameState) {
+    private func handleGameState(_ state: EquationGameState) {
         gameState = state
         switch state {
         case .waitingForPlayers:
@@ -96,21 +114,21 @@ class EquationHighLowViewModel: ObservableObject {
         
         let lastCard = selectedCards.last!
         if lastCard.type == .number {
-            return card.type == .operator
+            return card.type == .operation
         } else {
             return card.type == .number
         }
     }
     
     private func isValidEquation() -> Bool {
-        // Check if we have a valid equation (number-operator-number pattern)
+        // Check if we have a valid equation (number-operation-number pattern)
         guard selectedCards.count >= 3 else { return false }
         
         let isValidPattern = selectedCards.enumerated().allSatisfy { index, card in
             if index % 2 == 0 {
                 return card.type == .number
             } else {
-                return card.type == .operator
+                return card.type == .operation
             }
         }
         
@@ -165,17 +183,24 @@ class EquationHighLowViewModel: ObservableObject {
 }
 
 // MARK: - Game Models
-enum GameState {
+enum EquationGameState {
     case waitingForPlayers
     case playing
     case roundEnded
     case gameEnded
-}
-
-struct Player: Identifiable {
-    let id: String
-    var chips: Int
-    var isEliminated: Bool
+    
+    var toGameState: GameState {
+        switch self {
+        case .waitingForPlayers:
+            return .notStarted
+        case .playing:
+            return .playing
+        case .roundEnded:
+            return .roundEnded
+        case .gameEnded:
+            return .gameComplete
+        }
+    }
 }
 
 struct Bid {
@@ -185,19 +210,19 @@ struct Bid {
     let equationResult: Double
 }
 
-enum CardType {
+enum CardType: Codable {
     case number
-    case operator
+    case operation // Renamed from 'operator'
 }
 
-enum Operation {
+enum Operation: Codable {
     case add
     case subtract
     case multiply
     case divide
 }
 
-struct EquationCard: Identifiable {
+struct EquationCard: Identifiable, Codable {
     let id = UUID()
     let type: CardType
     let value: Double

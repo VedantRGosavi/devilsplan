@@ -6,6 +6,14 @@ enum ConvexError: Error {
     case invalidResponse
 }
 
+struct LeaderboardEntry: Codable, Identifiable {
+    let id: String
+    let userId: String
+    let username: String
+    let score: Int
+    let rank: Int
+}
+
 class ConvexClient {
     static let shared = ConvexClient()
     let baseURL: String
@@ -33,14 +41,17 @@ class ConvexClient {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         
-        let body = [
+        var body: [String: Any] = [
             "userId": userId,
             "gameId": gameId,
             "status": status,
             "currentLevel": currentLevel,
-            "score": score,
-            "completedAt": completedAt?.timeIntervalSince1970
-        ] as [String : Any]
+            "score": score
+        ]
+        
+        if let timestamp = completedAt?.timeIntervalSince1970 {
+            body["completedAt"] = timestamp
+        }
         
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
         
@@ -79,5 +90,17 @@ class ConvexClient {
             )
         }
         return nil
+    }
+    
+    func getLeaderboard(gameId: String, limit: Int = 10) async throws -> [LeaderboardEntry] {
+        let url = URL(string: "\(baseURL)/getLeaderboard?gameId=\(gameId)&limit=\(limit)")!
+        let (data, response) = try await URLSession.shared.data(from: url)
+        
+        guard let httpResponse = response as? HTTPURLResponse,
+              (200...299).contains(httpResponse.statusCode) else {
+            throw ConvexError.invalidResponse
+        }
+        
+        return try JSONDecoder().decode([LeaderboardEntry].self, from: data)
     }
 } 

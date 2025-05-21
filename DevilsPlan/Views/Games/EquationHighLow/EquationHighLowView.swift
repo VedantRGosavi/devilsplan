@@ -61,7 +61,7 @@ struct EquationHighLowView: GameView {
                         ScrollView(.horizontal, showsIndicators: false) {
                             HStack(spacing: 15) {
                                 ForEach(engine.players) { player in
-                                    PlayerStatsView(
+                                    EquationPlayerStatsView(
                                         player: player,
                                         isCurrentPlayer: engine.players[engine.currentPlayerIndex].id == player.id
                                     )
@@ -216,7 +216,7 @@ struct BidControlsView: View {
     }
 }
 
-struct PlayerStatsView: View {
+struct EquationPlayerStatsView: View {
     let player: Player
     let isCurrentPlayer: Bool
     
@@ -245,9 +245,11 @@ struct PlayerStatsView: View {
 }
 
 #Preview {
-    EquationHighLowView(
-        game: Game(id: "3", name: "Equation High-Low", description: "Build equations to win", levels: 1, maxScore: 1000),
-        engine: EquationHighLowEngine()
-    )
-    .environment(Clerk())
+    NavigationView {
+        EquationHighLowView(
+            game: Game.preview,
+            engine: EquationHighLowEngine()
+        )
+        .environment(Clerk.shared)
+    }
 } 

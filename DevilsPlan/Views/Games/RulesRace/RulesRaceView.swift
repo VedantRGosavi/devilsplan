@@ -28,7 +28,7 @@ struct RulesRaceView: GameView {
                         ScrollView(.horizontal, showsIndicators: false) {
                             HStack(spacing: 15) {
                                 ForEach(engine.players) { player in
-                                    PlayerStatsView(
+                                    RulesRacePlayerStatsView(
                                         player: player,
                                         isCurrentPlayer: engine.players[engine.currentPlayerIndex].id == player.id
                                     )
@@ -233,7 +233,7 @@ struct PlayerToken: View {
     }
 }
 
-struct PlayerStatsView: View {
+struct RulesRacePlayerStatsView: View {
     let player: RulesRacePlayer
     let isCurrentPlayer: Bool
     
@@ -291,8 +291,8 @@ struct DiceView: View {
 
 #Preview {
     RulesRaceView(
-        game: Game(id: "2", name: "Rules Race", description: "Race to the finish", levels: 1, maxScore: 1000),
+        game: Game.preview,
         engine: RulesRaceEngine()
     )
-    .environment(Clerk())
+    .environment(Clerk.shared)
 } 

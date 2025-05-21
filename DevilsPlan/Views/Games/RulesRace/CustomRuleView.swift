@@ -28,7 +28,7 @@ struct CustomRuleView: View {
                 // Add new rule
                 HStack {
                     TextField("Enter new rule", text: $newRule)
-                        .textFieldStyle(RoundedBorderTextStyle())
+                        .textFieldStyle(.roundedBorder)
                         .foregroundColor(.black)
                     
                     Button(action: addRule) {

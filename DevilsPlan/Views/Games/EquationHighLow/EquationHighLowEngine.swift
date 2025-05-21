@@ -272,25 +272,6 @@ struct Player: Codable, Identifiable {
     var targetNumber: Int = Int.random(in: 1...100)
 }
 
-struct EquationCard: Codable, Identifiable {
-    let id: String
-    let value: String
-    let type: CardType
-    var operation: Operation?
-}
-
-enum CardType: String, Codable {
-    case number
-    case operation
-}
-
-enum Operation: String, Codable {
-    case add = "+"
-    case subtract = "-"
-    case multiply = "×"
-    case divide = "÷"
-}
-
 struct EquationGameData: Codable {
     let availableCards: [EquationCard]
     let players: [Player]

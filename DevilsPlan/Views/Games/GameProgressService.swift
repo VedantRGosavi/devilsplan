@@ -33,23 +33,6 @@ class GameProgressService {
     }
 }
 
-struct GameProgress: Codable {
-    let userId: String
-    let gameId: String
-    let status: String
-    let currentLevel: Int
-    let score: Int
-    let completedAt: Date?
-}
-
-struct LeaderboardEntry: Codable, Identifiable {
-    let id: String
-    let userId: String
-    let username: String
-    let score: Int
-    let rank: Int
-}
-
 struct LeaderboardView: View {
     let gameId: String
     @State private var entries: [LeaderboardEntry] = []

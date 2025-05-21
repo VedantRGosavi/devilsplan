@@ -1,6 +1,7 @@
 import SwiftUI
 import MultipeerConnectivity
 import Combine
+import GameKit
 
 class MultiplayerGameService: NSObject, ObservableObject {
     // MARK: - Published Properties

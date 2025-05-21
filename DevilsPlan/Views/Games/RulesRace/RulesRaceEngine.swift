@@ -6,10 +6,11 @@ class RulesRaceEngine: ObservableObject, GameProtocol {
     @Published private(set) var currentPlayerIndex = 0
     @Published private(set) var score = 0
     @Published private(set) var currentLevel = 1
-    @Published var gameState: GameState = .notStarted
     @Published private(set) var diceResult = 0
     @Published private(set) var rules: [GameRule] = []
+    @Published var raceState: RulesRaceState = .notStarted
     
+    var gameState: GameState { raceState.toGameState }
     var isMultiplayer: Bool { true }
     
     private let multiplayerService: MultiplayerGameService
@@ -23,7 +24,7 @@ class RulesRaceEngine: ObservableObject, GameProtocol {
     // MARK: - GameProtocol Implementation
     func startGame() {
         resetGame()
-        gameState = .playing
+        raceState = .playing
         if multiplayerService.isHost {
             setupInitialGameState()
         }
@@ -36,11 +37,11 @@ class RulesRaceEngine: ObservableObject, GameProtocol {
         currentLevel = 1
         diceResult = 0
         rules = []
-        gameState = .notStarted
+        raceState = .notStarted
     }
     
     func endGame() {
-        gameState = .gameComplete
+        raceState = .finished
         multiplayerService.disconnect()
     }
     
@@ -48,10 +49,10 @@ class RulesRaceEngine: ObservableObject, GameProtocol {
         try await GameProgressService.shared.updateGameProgress(
             userId: userId,
             gameId: "rules_race",
-            status: gameState == .gameComplete ? "completed" : "in_progress",
+            status: raceState == .finished ? "completed" : "in_progress",
             currentLevel: currentLevel,
             score: score,
-            completedAt: gameState == .gameComplete ? Date() : nil
+            completedAt: raceState == .finished ? Date() : nil
         )
     }
     
@@ -76,7 +77,7 @@ class RulesRaceEngine: ObservableObject, GameProtocol {
     private func setupInitialGameState() {
         // Create initial game state
         rules = createDefaultRules()
-        players = [RulesRacePlayer(id: multiplayerService.currentPlayerId, name: "Host", position: 0)]
+        players = [RulesRacePlayer(id: multiplayerService.currentPlayerId, name: "Host")]
         
         // Send initial state to other players
         let gameData = RulesRaceGameData(
@@ -88,7 +89,16 @@ class RulesRaceEngine: ObservableObject, GameProtocol {
     }
     
     private func handleGameState(_ state: GameState) {
-        gameState = state
+        switch state {
+        case .notStarted:
+            raceState = .notStarted
+        case .playing:
+            raceState = .playing
+        case .gameComplete:
+            raceState = .finished
+        default:
+            break
+        }
     }
     
     private func handleGameData(_ data: GameDataReceived) {
@@ -146,7 +156,7 @@ class RulesRaceEngine: ObservableObject, GameProtocol {
         
         // Check for win condition
         if player.position >= 100 {
-            gameState = .gameComplete
+            raceState = .finished
             score = calculateScore(for: player)
         }
         

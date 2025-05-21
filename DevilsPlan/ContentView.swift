@@ -16,7 +16,7 @@ struct ContentView: View {
     NavigationView {
       VStack {
         if let user = clerk.user {
-          HomeView()
+            HomeView()
         } else {
           SignUpOrSignInView()
         }
@@ -27,5 +27,5 @@ struct ContentView: View {
 
 #Preview {
   ContentView()
-    .environment(Clerk())
+    .environment(Clerk.shared)
 }
