@@ -13,15 +13,19 @@ struct ContentView: View {
   @Environment(Clerk.self) private var clerk
 
   var body: some View {
-    VStack {
-      if let user = clerk.user {
-        Text("Hello, \(user.id)")
-        Button("Sign Out") {
-          Task { try? await clerk.signOut() }
+    NavigationView {
+      VStack {
+        if let user = clerk.user {
+          HomeView()
+        } else {
+          SignUpOrSignInView()
         }
-      } else {
-        SignUpOrSignInView()
       }
     }
   }
+}
+
+#Preview {
+  ContentView()
+    .environment(Clerk())
 }
