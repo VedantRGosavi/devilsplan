@@ -1,0 +1,57 @@
+# Xcode
+# Ignore DerivedData directory, which contains build artifacts
+DerivedData/
+# Ignore user-specific settings within Xcode projects and workspaces
+**/xcuserdata/
+
+# Build products
+# Ignore build directories and common iOS build outputs
+build/
+*.ipa
+*.app
+*.dSYM.zip
+*.dSYM
+
+# Temporary files
+# Ignore common temporary file extensions
+*.tmp
+*.bak
+*.swp
+
+# macOS files
+# Ignore macOS Finder metadata files
+.DS_Store
+
+# Dependency managers
+# Ignore CocoaPods generated directory
+Pods/
+# Ignore Carthage build directory
+Carthage/Build/
+# Ignore Swift Package Manager build directory
+.build/
+
+# Node.js
+# Ignore Node.js modules directory
+node_modules/
+# Ignore npm/yarn/pnpm lock files if not needed in the repo
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+# Ignore Node.js build and distribution directories
+dist/
+out/
+# Ignore Node.js environment files with sensitive data
+.env
+.env.local
+.env.*.local
+# Ignore Node.js logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Convex-specific
+# Ignore Convex build artifacts or local dev files (if applicable)
+convex/_generated/
+# Ignore local Convex environment files
+convex/.env.local
