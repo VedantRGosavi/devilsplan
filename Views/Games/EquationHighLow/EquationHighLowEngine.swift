@@ -1,253 +1,577 @@
 import Foundation
 import Combine
 
+// Models (GameState, Player, EquationCard, CardType, Operation, EquationGameData, EquationMove) 
+// and Collection extension are now defined in EquationHighLowModels.swift
+
 class EquationHighLowEngine: ObservableObject, GameProtocol {
     @Published private(set) var availableCards: [EquationCard] = []
     @Published private(set) var selectedCards: [EquationCard] = []
-    @Published private(set) var currentPlayerChips = 100 // Starting chips
-    @Published private(set) var bidAmount = 1
+    // currentPlayerChips now reflects the chips of the local player from the `players` list
+    @Published var currentPlayerChips: Int = 100
+    @Published var bidAmount: Int = 1 // Default bid amount, can be changed by UI
     @Published var gameState: GameState = .notStarted
     @Published private(set) var players: [Player] = []
-    @Published private(set) var currentPlayerIndex = 0
+    @Published private(set) var currentPlayerIndex: Int = 0 // Host controls this
     @Published private(set) var roundWinner: Player?
-    @Published private(set) var score = 0
-    @Published private(set) var currentLevel = 1
+    @Published var score: Int = 0 // Local player's score
+    @Published private(set) var currentLevel: Int = 1
+    @Published private(set) var displayedEquationValue: Double? = nil // For UI display of current selection's value
     
-    var isMultiplayer: Bool { true }
+    var isMultiplayer: Bool { true } // This class is designed for multiplayer
+    var isHost: Bool = false // Is this instance the host?
     
-    private let multiplayerService: MultiplayerGameService
-    private var cancellables = Set<AnyCancellable>()
+    private let gameNetworkingService: GameNetworkingService // Using the protocol
+    private let gameId: String // To store the game ID
+    private var cancellables = Set<AnyCancellable>() // Keep for any Combine subscriptions if needed
     
-    init(multiplayerService: MultiplayerGameService = MultiplayerGameService(serviceType: "equation-high-low")) {
-        self.multiplayerService = multiplayerService
-        setupMultiplayer()
+    // Store bids from players for the current round for the host to evaluate
+    @Published private(set) var playerBids: [String: Int] = [:] // [PlayerID: BidAmount]
+    
+    init(gameNetworkingService: GameNetworkingService, gameId: String) {
+        self.gameNetworkingService = gameNetworkingService
+        self.gameId = gameId
+        // The service should have its engine reference set externally after engine init,
+        // or via a method if a two-way dependency during init is complex.
+        // For simplicity, assuming service can be given a reference.
+        // (The service's setEngineReference was added in its refactoring)
     }
     
+    // MARK: - Game Lifecycle & Hosting
+    func hostGame() {
+        isHost = true
+        resetGameInternals() // Reset state before hosting
+        // Add host player. Name can be customized.
+        let hostPlayer = Player(id: gameNetworkingService.localPlayerId, name: "Player 1 (Host)", chips: 100, score: 0)
+        players.append(hostPlayer)
+        currentPlayerChips = hostPlayer.chips // Update local display of chips
+        score = hostPlayer.score ?? 0 // Update local display of score
+        gameState = .waitingForPlayers
+        gameNetworkingService.startAdvertising()
+        setupInitialGameStateForHost() // Prepare cards, doesn't broadcast yet
+        broadcastFullGameState()     // Broadcast initial state
+        AppLogger.info("Engine \(gameNetworkingService.localPlayerId) is hosting. State: \(gameState). Players: \(players.count)")
+    }
+
+    func joinGame() {
+        isHost = false
+        resetGameInternals() // Reset state before joining
+        gameState = .waitingForPlayers
+        gameNetworkingService.startBrowsing()
+        AppLogger.info("Engine \(gameNetworkingService.localPlayerId) is joining. State: \(gameState)")
+    }
+
     // MARK: - GameProtocol Implementation
-    func startGame() {
-        resetGame()
-        gameState = .playing
-        if multiplayerService.isHost {
-            setupInitialGameState()
+    func startGame() { // Called by UI, typically by the host to move from waiting to playing
+        guard isHost else {
+            AppLogger.warning("Client \(gameNetworkingService.localPlayerId) attempted to start game, but only host can.")
+            return
+        }
+        
+        if gameState == .waitingForPlayers && !players.isEmpty {
+            AppLogger.info("Host \(gameNetworkingService.localPlayerId) is starting the game. Current players: \(players.count)")
+            gameState = .playing
+            currentLevel = 1
+            // score and currentPlayerChips for host already set in hostGame()
+            
+            // Resetting parts of the game state for the actual start
+            availableCards = generateCards()
+            selectedCards = []
+            currentPlayerIndex = 0 // Host starts
+            roundWinner = nil
+            playerBids.removeAll()
+            
+            // Ensure all players in the list are reset for the game start (e.g. target numbers)
+            for i in 0..<players.count {
+                players[i].targetNumber = Int.random(in: 1...100) // Assign initial random target
+                players[i].score = 0 // Reset scores for all players at game start
+            }
+            if let hostPlayer = players.first(where: {$0.id == gameNetworkingService.localPlayerId}) {
+                 self.score = hostPlayer.score ?? 0 // Update host's score display
+            }
+
+            broadcastFullGameState()
+        } else {
+            AppLogger.warning("Host \(gameNetworkingService.localPlayerId) cannot start game. Not in waiting state or no players. Current state: \(gameState)")
         }
     }
     
-    func resetGame() {
+    private func resetGameInternals() {
         availableCards = generateCards()
         selectedCards = []
-        currentPlayerChips = 100
+        currentPlayerChips = 100 // Reset for local UI, will be updated from player list
         bidAmount = 1
         players = []
         currentPlayerIndex = 0
         roundWinner = nil
         score = 0
         currentLevel = 1
-        gameState = .notStarted
+        playerBids.removeAll()
+        // gameState will be set by hostGame/joinGame or startGame
+    }
+    
+    func resetGame() { // GameProtocol reset, typically called by host
+        AppLogger.info("Engine: resetGame called by \(gameNetworkingService.localPlayerId). isHost: \(isHost)")
+        guard isHost else { return }
+        
+        resetGameInternals()
+        let hostPlayer = Player(id: gameNetworkingService.localPlayerId, name: "Player 1 (Host)", chips: 100, score: 0)
+        players.append(hostPlayer)
+        currentPlayerChips = hostPlayer.chips
+        score = hostPlayer.score ?? 0
+        
+        gameState = .waitingForPlayers // Reset to waiting state for host to start again
+        setupInitialGameStateForHost() 
+        broadcastFullGameState()
     }
     
     func endGame() {
+        AppLogger.info("Engine: endGame called by \(gameNetworkingService.localPlayerId). isHost: \(isHost). Current state: \(gameState)")
         gameState = .gameComplete
-        multiplayerService.disconnect()
+        if isHost { // Only host broadcasts the final state and tells service to disconnect.
+            broadcastFullGameState() 
+        }
+        gameNetworkingService.disconnect() // All instances should disconnect from network.
     }
     
     func updateGameProgress(userId: String) async throws {
+        let progressUserId = players.first(where: { $0.id == gameNetworkingService.localPlayerId })?.id ?? userId
         try await GameProgressService.shared.updateGameProgress(
-            userId: userId,
-            gameId: "equation_high_low",
+            userId: progressUserId, gameId: self.gameId, // Use stored gameId
             status: gameState == .gameComplete ? "completed" : "in_progress",
-            currentLevel: currentLevel,
-            score: score,
+            currentLevel: currentLevel, score: score, // This is local player's score
             completedAt: gameState == .gameComplete ? Date() : nil
         )
     }
     
-    // MARK: - Game Logic
-    private func setupMultiplayer() {
-        multiplayerService.gameStatePublisher
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] state in
-                self?.handleGameState(state)
-            }
-            .store(in: &cancellables)
+    // MARK: - Networking Callbacks (called by GameNetworkingService)
+    
+    func handlePeerConnected(playerId: String) {
+        AppLogger.info("Engine: handlePeerConnected from \(playerId). Current player: \(gameNetworkingService.localPlayerId), isHost: \(isHost)")
+        guard isHost else { return }
         
-        NotificationCenter.default.publisher(for: .gameDataReceived)
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] notification in
-                guard let data = notification.object as? GameDataReceived else { return }
-                self?.handleGameData(data)
+        if !players.contains(where: { $0.id == playerId }) {
+            let newPlayerName = "Player \(players.count + 1)"
+            players.append(Player(id: playerId, name: newPlayerName, chips: 100, score: 0))
+            AppLogger.info("Engine Host \(gameNetworkingService.localPlayerId) added player \(playerId). Total players: \(players.count)")
+            broadcastFullGameState()
+        }
+    }
+
+    func handlePeerDisconnected(playerId: String) {
+        AppLogger.info("Engine: handlePeerDisconnected for \(playerId). Current player: \(gameNetworkingService.localPlayerId), isHost: \(isHost)")
+        // Note: Host disconnection logic for clients will be handled in a subsequent, focused change.
+        // This logging is for when the host processes a peer disconnect.
+        guard isHost else { 
+            // Client side: If the disconnected player is the host, this needs specific handling.
+            // This will be addressed in host disconnection logic.
+            // For now, just log if it's not the host that got disconnected.
+            if playerId != self.hostPlayerId { // Assuming self.hostPlayerId is correctly set on client
+                 AppLogger.info("Client \(gameNetworkingService.localPlayerId) noted peer \(playerId) disconnected.")
             }
-            .store(in: &cancellables)
-    }
-    
-    private func setupInitialGameState() {
-        availableCards = generateCards()
-        players = [Player(id: multiplayerService.currentPlayerId, name: "Host", chips: 100)]
+            return 
+        } 
         
-        let gameData = EquationGameData(
-            availableCards: availableCards,
-            players: players,
-            currentPlayerIndex: currentPlayerIndex
-        )
-        multiplayerService.sendGameData(gameData, type: "gameState")
+        let originalPlayerCount = players.count
+        players.removeAll { $0.id == playerId }
+        if players.count < originalPlayerCount {
+            AppLogger.info("Engine Host \(gameNetworkingService.localPlayerId) removed player \(playerId). Total players: \(players.count)")
+        }
+        
+        if players.isEmpty && isHost {
+            AppLogger.info("Engine Host \(gameNetworkingService.localPlayerId) is the only one left or no one left; resetting to notStarted.")
+            gameState = .notStarted 
+        } else if currentPlayerIndex >= players.count && !players.isEmpty {
+            currentPlayerIndex = 0 
+        }
+        broadcastFullGameState()
     }
     
-    private func handleGameState(_ state: GameState) {
-        gameState = state
+    func handlePeerLost(playerId: String) {
+        AppLogger.info("Engine: handlePeerLost for \(playerId). Current player: \(gameNetworkingService.localPlayerId), isHost: \(isHost)")
+        handlePeerDisconnected(playerId: playerId) // Treat lost peer same as disconnected
     }
-    
-    private func handleGameData(_ data: GameDataReceived) {
+
+    func handleReceivedData(payload: Data, type: String, fromPlayerId: String) {
+        // print("Engine: Received data type '\(type)' from \(fromPlayerId). isHost: \(isHost)")
         do {
-            switch data.type {
+            let decoder = JSONDecoder()
+            switch type {
             case "gameState":
-                let gameData = try JSONDecoder().decode(EquationGameData.self, from: data.data)
-                availableCards = gameData.availableCards
-                players = gameData.players
-                currentPlayerIndex = gameData.currentPlayerIndex
+                if !isHost { // Only non-host clients should process full gameState received from host
+                    let gameData = try decoder.decode(EquationGameData.self, from: payload)
+                    applyGameState(gameData)
+                }
             case "move":
-                let moveData = try JSONDecoder().decode(EquationMove.self, from: data.data)
-                handleMove(moveData)
+                let moveData = try decoder.decode(EquationMove.self, from: payload)
+                if isHost { // Host processes moves from clients
+                    processMove(moveData, fromPlayerId: fromPlayerId)
+                } else { // Client received a move (e.g. echo from host, or direct from another client if not host-authoritative)
+                    // If clients are allowed to see moves directly, they might apply them optimistically.
+                    // For now, relying on host's broadcastFullGameState for authoritative state.
+                    // However, applying selectCard optimistically can make UI feel more responsive.
+                    if moveData.type == .selectCard, let cardId = moveData.cardId {
+                        if let cardIndex = self.availableCards.firstIndex(where: { $0.id == cardId }) {
+                            let card = self.availableCards.remove(at: cardIndex)
+                            if !self.selectedCards.contains(where: { $0.id == card.id }) {
+                                self.selectedCards.append(card)
+                            }
+                        }
+                    }
+                    AppLogger.debug("Client Engine \(gameNetworkingService.localPlayerId): Optimistically updated UI for selectCard from \(fromPlayerId).")
+                }
             default:
-                break
+                AppLogger.warning("Engine: Unknown data type received: \(type) from \(fromPlayerId).")
             }
         } catch {
-            print("Error handling game data: \(error)")
+            // Error already logged by AppLogger in the catch block.
         }
+    }
+    
+    private func applyGameState(_ gameData: EquationGameData) {
+        guard !isHost else { return } // Host should not apply game state from network
+
+        self.availableCards = gameData.availableCards
+        self.players = gameData.players
+        self.currentPlayerIndex = gameData.currentPlayerIndex
+        self.selectedCards = gameData.selectedCards ?? []
+        self.currentLevel = gameData.currentLevel ?? 1
+        self.gameState = gameData.gameState ?? .playing // Default to playing if nil, but should always be sent
+        self.roundWinner = gameData.roundWinner
+        
+        if let myPlayerState = self.players.first(where: { $0.id == self.gameNetworkingService.localPlayerId }) {
+            self.score = myPlayerState.score ?? 0
+            self.currentPlayerChips = myPlayerState.chips
+        } else {
+            // If local player is not in the list, client might need to re-join or is eliminated.
+            if self.gameState != .gameComplete && self.gameState != .notStarted && self.gameState != .waitingForPlayers {
+                 AppLogger.warning("Client Engine: Local player \(self.gameNetworkingService.localPlayerId) not found in received player list from host. Current GameState: \(self.gameState)")
+            } else {
+                 self.currentPlayerChips = 0 
+                 self.score = 0
+            }
+        }
+        AppLogger.debug("Client Engine \(gameNetworkingService.localPlayerId): Applied game state from host. Current player: \(self.players[safe: self.currentPlayerIndex]?.id ?? "N/A")")
+    }
+
+    // MARK: - Game Actions & Logic
+    private func setupInitialGameStateForHost() { // Called by host
+        guard isHost else { return }
+        availableCards = generateCards()
+        selectedCards = []
+        currentPlayerIndex = 0 
+        roundWinner = nil
+        playerBids.removeAll()
+        // players list already initiated with host
+    }
+
+    func broadcastFullGameState() {
+        guard isHost else { return }
+        
+        let gameData = EquationGameData(
+            availableCards: availableCards, players: players, currentPlayerIndex: currentPlayerIndex,
+            selectedCards: selectedCards, currentLevel: currentLevel, gameState: gameState, roundWinner: roundWinner
+        )
+        AppLogger.debug("Host Engine \(gameNetworkingService.localPlayerId): Broadcasting full game state. Current player: \(players[safe: currentPlayerIndex]?.id ?? "N/A")")
+        gameNetworkingService.sendData(gameData, type: "gameState")
     }
     
     func selectCard(_ card: EquationCard) {
-        guard currentPlayerIndex < players.count,
-              players[currentPlayerIndex].id == multiplayerService.currentPlayerId,
-              !selectedCards.contains(where: { $0.id == card.id }) else { return }
+        guard let localPlayerId = players.first(where: { $0.id == gameNetworkingService.localPlayerId })?.id,
+              players[safe: currentPlayerIndex]?.id == localPlayerId else {
+            AppLogger.warning("Not player's turn (\(gameNetworkingService.localPlayerId)) to select a card. Current turn: \(players[safe: currentPlayerIndex]?.id ?? "N/A")")
+            return
+        }
         
-        selectedCards.append(card)
-        availableCards.removeAll { $0.id == card.id }
+        guard !selectedCards.contains(where: { $0.id == card.id }),
+              availableCards.contains(where: {$0.id == card.id}) else {
+            AppLogger.warning("Card \(card.id) already selected or not available. PlayerID: \(localPlayerId)")
+            return
+        }
         
-        let move = EquationMove(
-            playerId: multiplayerService.currentPlayerId,
-            cardId: card.id,
-            type: .selectCard
-        )
+        let move = EquationMove(playerId: localPlayerId, cardId: card.id, type: .selectCard)
+        gameNetworkingService.sendData(move, type: "move")
         
-        multiplayerService.sendGameData(move, type: "move")
+        if isHost { // Host processes its own move immediately
+            processMove(move, fromPlayerId: localPlayerId)
+        } else { // Client optimistically updates UI
+            if let cardIndex = self.availableCards.firstIndex(where: { $0.id == card.id }) {
+                let selectedCard = self.availableCards.remove(at: cardIndex)
+                if !self.selectedCards.contains(where: { $0.id == selectedCard.id }) {
+                    self.selectedCards.append(selectedCard)
+                }
+            }
+            // Update displayed equation value after optimistic client-side selection
+            updateDisplayedEquationValue() 
+        }
+    }
+
+    func deselectLastCard() {
+        guard let localPlayerId = players.first(where: { $0.id == gameNetworkingService.localPlayerId })?.id,
+              players[safe: currentPlayerIndex]?.id == localPlayerId else {
+            AppLogger.warning("Not player's turn (\(gameNetworkingService.localPlayerId)) to deselect a card.")
+            return
+        }
+
+        if selectedCards.isEmpty {
+            AppLogger.info("No cards selected to deselect. PlayerID: \(localPlayerId)")
+            return
+        }
+
+        // Create a "deselectLast" move
+        let move = EquationMove(playerId: localPlayerId, type: .deselectLast)
+        gameNetworkingService.sendData(move, type: "move")
+
+        if isHost { // Host processes its own move immediately
+            processMove(move, fromPlayerId: localPlayerId)
+        } else { // Client optimistically updates UI
+            if let lastCard = selectedCards.popLast() {
+                availableCards.append(lastCard) // Add back to available cards
+                // Sort available cards if necessary for consistent display (optional)
+                // availableCards.sort(by: { ... }) 
+            }
+            updateDisplayedEquationValue()
+        }
     }
     
     func placeBid() {
-        guard currentPlayerIndex < players.count,
-              players[currentPlayerIndex].id == multiplayerService.currentPlayerId,
-              currentPlayerChips >= bidAmount else { return }
+        guard let localPlayerId = players.first(where: { $0.id == gameNetworkingService.localPlayerId })?.id,
+              let localPlayerArrayIndex = players.firstIndex(where: {$0.id == localPlayerId}), 
+              players[safe: currentPlayerIndex]?.id == localPlayerId else {
+            AppLogger.warning("Not player's turn (\(gameNetworkingService.localPlayerId)) to place a bid.")
+            return
+        }
         
-        currentPlayerChips -= bidAmount
+        guard players[localPlayerArrayIndex].chips >= bidAmount else {
+            AppLogger.warning("Player \(localPlayerId) does not have enough chips (\(players[localPlayerArrayIndex].chips)) to place bid (\(bidAmount)).")
+            return
+        }
         
-        let move = EquationMove(
-            playerId: multiplayerService.currentPlayerId,
-            bidAmount: bidAmount,
-            type: .placeBid
-        )
-        
-        multiplayerService.sendGameData(move, type: "move")
-        handleMove(move)
+        let move = EquationMove(playerId: localPlayerId, bidAmount: bidAmount, type: .placeBid)
+        gameNetworkingService.sendData(move, type: "move")
+
+        if isHost { // Host processes its own move immediately
+            processMove(move, fromPlayerId: localPlayerId)
+        } else { // Client optimistically updates UI
+            if self.players[localPlayerArrayIndex].chips >= bidAmount {
+                 self.players[localPlayerArrayIndex].chips -= bidAmount // Update local player object
+                 self.currentPlayerChips = self.players[localPlayerArrayIndex].chips // Update published value
+                 // Note: playerBids is not updated on client side, host manages this.
+            }
+        }
     }
     
-    private func handleMove(_ move: EquationMove) {
+    private func processMove(_ move: EquationMove, fromPlayerId: String) {
+        guard isHost else { 
+            AppLogger.warning("Client Engine (\(gameNetworkingService.localPlayerId)) received processMove call, but only host should process. Move: \(move.type) from \(fromPlayerId)")
+            return
+        }
+
+        AppLogger.info("Host Engine (\(gameNetworkingService.localPlayerId)) processing move type \(move.type) from \(fromPlayerId)")
+        var stateChanged = false
         switch move.type {
         case .selectCard:
             guard let cardId = move.cardId,
-                  let card = availableCards.first(where: { $0.id == cardId }) else { return }
-            selectedCards.append(card)
-            availableCards.removeAll { $0.id == cardId }
-            
+                  let cardFromAvailable = availableCards.first(where: { $0.id == cardId }) else { 
+                AppLogger.warning("Host Engine: Card not found in available for selectCard: \(cardId ?? "nil"). PlayerID: \(fromPlayerId)")
+                return 
+            }
+
+            // Card selection validation
+            if selectedCards.isEmpty {
+                guard cardFromAvailable.type == .number else {
+                    AppLogger.warning("Host Engine: Invalid first card selection. Must be a number. Card: \(cardFromAvailable.value). PlayerID: \(fromPlayerId)")
+                    return 
+                }
+            } else {
+                let lastSelectedCard = selectedCards.last!
+                if lastSelectedCard.type == .number {
+                    guard cardFromAvailable.type == .operation else {
+                        AppLogger.warning("Host Engine: Invalid card selection after number. Must be an operator. Card: \(cardFromAvailable.value). PlayerID: \(fromPlayerId)")
+                        return 
+                    }
+                } else { // Last selected was an operator
+                    guard cardFromAvailable.type == .number else {
+                        AppLogger.warning("Host Engine: Invalid card selection after operator. Must be a number. Card: \(cardFromAvailable.value). PlayerID: \(fromPlayerId)")
+                        return
+                    }
+                }
+            }
+
+            if !selectedCards.contains(where: { $0.id == cardId }) {
+                selectedCards.append(cardFromAvailable)
+                availableCards.removeAll { $0.id == cardId }
+                stateChanged = true
+                updateDisplayedEquationValue() 
+            }
+        case .deselectLast:
+            if let lastCard = selectedCards.popLast() {
+                availableCards.append(lastCard) 
+                stateChanged = true
+                updateDisplayedEquationValue() 
+            } else {
+                AppLogger.warning("Host Engine: Attempted to deselect from empty selectedCards. PlayerID: \(fromPlayerId)")
+            }
         case .placeBid:
-            guard let bidAmount = move.bidAmount else { return }
-            if let playerIndex = players.firstIndex(where: { $0.id == move.playerId }) {
-                players[playerIndex].chips -= bidAmount
-                evaluateRound()
+            guard let bidAmt = move.bidAmount,
+                  let playerIdx = players.firstIndex(where: { $0.id == fromPlayerId }) else {
+                AppLogger.warning("Host Engine: Invalid bid move from \(fromPlayerId). Missing bid amount or player not found.")
+                return 
+            }
+            
+            if players[playerIdx].chips >= bidAmt {
+                players[playerIdx].chips -= bidAmt
+                playerBids[fromPlayerId] = (playerBids[fromPlayerId] ?? 0) + bidAmt 
+                stateChanged = true
+                
+                let activePlayers = players.filter { $0.chips > 0 || playerBids[$0.id] != nil } 
+                if playerBids.count == activePlayers.count && !activePlayers.isEmpty {
+                    evaluateRound() 
+                    return 
+                }
+            } else {
+                AppLogger.warning("Host Engine: Player \(fromPlayerId) insufficient chips (\(players[playerIdx].chips)) for bid (\(bidAmt)).")
+                return 
             }
         }
         
-        // Next player's turn
-        currentPlayerIndex = (currentPlayerIndex + 1) % players.count
+        // If state changed from selectCard or a bid that didn't trigger evaluation yet:
+        if stateChanged {
+            // Advance turn only after a successful action for the current player
+            // Check if the game is in a state where turn should advance (e.g. not all bids are in)
+            if players.count > 0 { // Ensure players list is not empty
+                 currentPlayerIndex = (currentPlayerIndex + 1) % players.count
+            }
+            broadcastFullGameState()
+        }
     }
     
-    private func evaluateRound() {
-        guard let result = calculateEquationResult() else { return }
-        
-        // Find the player with the highest bid who got closest to the target number
-        var bestDifference = Double.infinity
-        var winningPlayer: Player?
-        
-        for player in players {
-            let difference = abs(result - Double(player.targetNumber))
-            if difference < bestDifference {
-                bestDifference = difference
-                winningPlayer = player
-            }
+    private func evaluateRound() { 
+        guard isHost else { return }
+        AppLogger.info("Host Engine (\(gameNetworkingService.localPlayerId)): Evaluating round. Number of bids: \(playerBids.count)")
+        guard let result = calculateEquationResult() else {
+            AppLogger.error("Host Engine (\(gameNetworkingService.localPlayerId)): Could not calculate equation result for evaluation.")
+            startNewRound() 
+            broadcastFullGameState()
+            return
         }
         
-        if let winner = winningPlayer {
-            roundWinner = winner
-            if let index = players.firstIndex(where: { $0.id == winner.id }) {
-                players[index].chips += bidAmount * 2
-                if winner.id == multiplayerService.currentPlayerId {
-                    score += bidAmount * 2
+        var bestDifference = Double.infinity
+        var winnerId: String?
+        
+        for (pId, _) in playerBids { 
+            if let player = players.first(where: { $0.id == pId }) {
+                let difference = abs(result - Double(player.targetNumber)) 
+                if difference < bestDifference {
+                    bestDifference = difference
+                    winnerId = player.id
+                } else if difference == bestDifference {
+                    // TODO: Handle ties if necessary more robustly (e.g. split pot or random)
+                    AppLogger.info("Tie detected in evaluateRound. Current winner: \(winnerId ?? "none"), Tie with: \(player.id)")
                 }
             }
         }
         
-        // Check for game over
-        if players.contains(where: { $0.chips <= 0 }) {
+        if let winId = winnerId, let winnerIdx = players.firstIndex(where: { $0.id == winId }) {
+            roundWinner = players[winnerIdx]
+            let pot = playerBids.values.reduce(0, +) 
+            players[winnerIdx].chips += pot
+            players[winnerIdx].score = (players[winnerIdx].score ?? 0) + pot
+            if players[winnerIdx].id == gameNetworkingService.localPlayerId { 
+                self.score = players[winnerIdx].score ?? 0 
+                self.currentPlayerChips = players[winnerIdx].chips 
+            }
+            AppLogger.info("Host Engine (\(gameNetworkingService.localPlayerId)): Round winner is \(players[winnerIdx].name) with pot \(pot).")
+        } else {
+            roundWinner = nil 
+            AppLogger.info("Host Engine (\(gameNetworkingService.localPlayerId)): No winner this round, or no bids placed.")
+        }
+        
+        playerBids.removeAll() 
+        
+        let activePlayersWithChips = players.filter { $0.chips > 0 }
+        if activePlayersWithChips.count <= 1 && players.count > 1 { 
+            AppLogger.info("Host Engine (\(gameNetworkingService.localPlayerId)): Game complete due to chip count. Active players: \(activePlayersWithChips.count)")
+            gameState = .gameComplete
+        } else if currentLevel >= 10 { 
+            AppLogger.info("Host Engine (\(gameNetworkingService.localPlayerId)): Game complete due to reaching max levels.")
             gameState = .gameComplete
         } else {
             startNewRound()
         }
+        broadcastFullGameState() 
     }
     
-    private func startNewRound() {
+    private func startNewRound() { 
+        guard isHost else { return }
+        AppLogger.info("Host Engine (\(gameNetworkingService.localPlayerId)): Starting new round. Current level: \(currentLevel + 1)")
         selectedCards = []
-        availableCards = generateCards()
-        roundWinner = nil
+        availableCards = generateCards() 
+        roundWinner = nil 
         currentLevel += 1
+        playerBids.removeAll()
         
-        let gameData = EquationGameData(
-            availableCards: availableCards,
-            players: players,
-            currentPlayerIndex: currentPlayerIndex
-        )
-        multiplayerService.sendGameData(gameData, type: "gameState")
-    }
-    
-    private func calculateEquationResult() -> Double? {
-        guard selectedCards.count >= 3 else { return nil }
-        
-        let numbers = selectedCards.compactMap { Double($0.value) }
-        let operators = selectedCards.compactMap { $0.operation }
-        
-        guard numbers.count >= 2, operators.count >= 1 else { return nil }
-        
-        var result = numbers[0]
-        var numberIndex = 1
-        var operatorIndex = 0
-        
-        while numberIndex < numbers.count && operatorIndex < operators.count {
-            switch operators[operatorIndex] {
-            case .add:
-                result += numbers[numberIndex]
-            case .subtract:
-                result -= numbers[numberIndex]
-            case .multiply:
-                result *= numbers[numberIndex]
-            case .divide:
-                guard numbers[numberIndex] != 0 else { return nil }
-                result /= numbers[numberIndex]
-            }
-            
-            numberIndex += 1
-            operatorIndex += 1
+        for i in 0..<players.count { 
+            players[i].targetNumber = Int.random(in: 1...100) 
         }
         
-        return result
+        if players.count > 0 { 
+            currentPlayerIndex = (currentPlayerIndex + 1) % players.count 
+        } else {
+            currentPlayerIndex = 0
+        }
+        gameState = .playing 
     }
     
-    private func generateCards() -> [EquationCard] {
+    // This is the main calculation for round evaluation
+    private func calculateEquationResult() -> Double? {
+        return calculateEquationValue(from: self.selectedCards)
+    }
+
+    // Renamed from ViewModel's calculateEquationResult(from:)
+    // This can be used for both display and final evaluation.
+    private func calculateEquationValue(from cards: [EquationCard]) -> Double? {
+        guard isValidEquation(cards: cards) else { return nil }
+
+        guard let firstNumber = Double(cards[0].value) else { return nil }
+        var currentResult = firstNumber
+        
+        var i = 1
+        while i < cards.count {
+            let operationCard = cards[i]
+            guard let operation = operationCard.operation else { return nil } 
+            
+            guard i + 1 < cards.count, let nextNumberValue = Double(cards[i+1].value) else { return nil } 
+            
+            switch operation {
+            case .add: currentResult += nextNumberValue
+            case .subtract: currentResult -= nextNumberValue
+            case .multiply: currentResult *= nextNumberValue
+            case .divide:
+                if nextNumberValue == 0 { return nil } 
+                currentResult /= nextNumberValue
+            }
+            i += 2 
+        }
+        return currentResult
+    }
+
+    // Moved from ViewModel
+    private func isValidEquation(cards: [EquationCard]) -> Bool {
+        guard cards.count >= 3, cards.count % 2 == 1 else { return false } 
+
+        for (index, card) in cards.enumerated() {
+            if index % 2 == 0 && card.type != .number { return false } 
+            if index % 2 != 0 && card.type != .operation { return false } 
+        }
+        return true
+    }
+    
+    private func updateDisplayedEquationValue() {
+        self.displayedEquationValue = calculateEquationValue(from: self.selectedCards)
+    }
+
+    internal func generateCards() -> [EquationCard] { 
         var cards: [EquationCard] = []
         
         // Generate number cards (1-10)
@@ -265,46 +589,8 @@ class EquationHighLowEngine: ObservableObject, GameProtocol {
     }
 }
 
-struct Player: Codable, Identifiable {
-    let id: String
-    let name: String
-    var chips: Int
-    var targetNumber: Int = Int.random(in: 1...100)
+// Player, EquationCard, CardType, Operation, EquationGameData, EquationMove structs/enums 
+// are now defined in EquationHighLowModels.swift
 }
 
-struct EquationCard: Codable, Identifiable {
-    let id: String
-    let value: String
-    let type: CardType
-    var operation: Operation?
-}
-
-enum CardType: String, Codable {
-    case number
-    case operation
-}
-
-enum Operation: String, Codable {
-    case add = "+"
-    case subtract = "-"
-    case multiply = "×"
-    case divide = "÷"
-}
-
-struct EquationGameData: Codable {
-    let availableCards: [EquationCard]
-    let players: [Player]
-    let currentPlayerIndex: Int
-}
-
-struct EquationMove: Codable {
-    let playerId: String
-    var cardId: String?
-    var bidAmount: Int?
-    let type: MoveType
-}
-
-enum MoveType: String, Codable {
-    case selectCard
-    case placeBid
-} 
+// Helper for safe array access is now in EquationHighLowModels.swift

@@ -2,205 +2,69 @@ import SwiftUI
 import Combine
 
 class EquationHighLowViewModel: ObservableObject {
-    @Published var availableCards: [EquationCard] = []
-    @Published var selectedCards: [EquationCard] = []
-    @Published var currentPlayerChips = 100 // Starting chips
-    @Published var bidAmount = 1
-    @Published var canBid = false
-    @Published var gameState: GameState = .waitingForPlayers
-    @Published var players: [Player] = []
-    @Published var currentPlayerIndex = 0
-    @Published var roundWinner: Player?
+    @ObservedObject var engine: EquationHighLowEngine
     
+    // Properties like canBid will now be derived from engine's state or be methods in the engine
+    // @Published var canBid = false 
+
+    // currentEquationResult will now be a method or computed property that likely calls engine's logic
+    // Or the engine itself might publish the result if it's part of the shared state.
+    // For now, let's assume it's a calculation based on engine.selectedCards
     var currentEquationResult: Double? {
-        calculateEquationResult()
+        // Logic has been moved to the engine. ViewModel now reads from engine's published property.
+        return engine.displayedEquationValue
     }
     
-    private var cancellables = Set<AnyCancellable>()
-    private let gameService: EquationHighLowGameService
+    // private var cancellables = Set<AnyCancellable>() // No longer needed
+    // private let gameService: EquationHighLowGameService // ViewModel interacts with Engine, not GameService directly.
     
-    init(gameService: EquationHighLowGameService = EquationHighLowGameService()) {
-        self.gameService = gameService
-        setupGame()
-        observeGameState()
+    init(engine: EquationHighLowEngine) {
+        self.engine = engine
+        // setupGame() is removed - engine handles its own setup
+        // observeGameState() is removed - direct observation of engine's @Published properties
     }
     
-    private func setupGame() {
-        // Generate number cards (1-9)
-        let numberCards = (1...9).map { EquationCard(type: .number, value: Double($0), display: "\($0)") }
-        
-        // Generate operator cards (+, -, *, /)
-        let operatorCards = [
-            EquationCard(type: .operator, value: 0, display: "+", operation: .add),
-            EquationCard(type: .operator, value: 0, display: "-", operation: .subtract),
-            EquationCard(type: .operator, value: 0, display: "×", operation: .multiply),
-            EquationCard(type: .operator, value: 0, display: "÷", operation: .divide)
-        ]
-        
-        availableCards = (numberCards + operatorCards).shuffled()
-    }
+    // setupGame() removed - engine handles this
     
-    private func observeGameState() {
-        gameService.gameStatePublisher
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] state in
-                self?.handleGameState(state)
-            }
-            .store(in: &cancellables)
-    }
-    
-    private func handleGameState(_ state: GameState) {
-        gameState = state
-        switch state {
-        case .waitingForPlayers:
-            break
-        case .playing:
-            canBid = true
-        case .roundEnded:
-            canBid = false
-            determineRoundWinner()
-        case .gameEnded:
-            handleGameEnd()
-        }
-    }
+    // observeGameState() and handleGameState() removed
     
     func selectCard(_ card: EquationCard) {
-        guard isValidCardSelection(card) else { return }
-        
-        if let index = availableCards.firstIndex(where: { $0.id == card.id }) {
-            availableCards.remove(at: index)
-            selectedCards.append(card)
-            
-            // Check if equation is complete
-            if isValidEquation() {
-                canBid = true
-            }
-        }
+        // Delegate to the engine. The engine will handle selection logic and multiplayer broadcast.
+        engine.selectCard(card)
+        // Logic for canBid should be handled by the engine's state changes.
     }
     
-    func removeCard(_ card: EquationCard) {
-        if let index = selectedCards.firstIndex(where: { $0.id == card.id }) {
-            selectedCards.remove(at: index)
-            availableCards.append(card)
-            canBid = false
-        }
+    // Renamed from removeCard to better reflect the action now implemented in the engine.
+    // The view might need to be updated if it was calling removeCard(card).
+    // This method now doesn't need a card parameter if it always removes the last one.
+    func deselectLastSelectedCard() { 
+        engine.deselectLastCard()
     }
     
-    private func isValidCardSelection(_ card: EquationCard) -> Bool {
-        // Check if the card selection follows valid equation pattern
-        let currentCount = selectedCards.count
-        
-        if currentCount == 0 {
-            return card.type == .number
-        }
-        
-        let lastCard = selectedCards.last!
-        if lastCard.type == .number {
-            return card.type == .operator
-        } else {
-            return card.type == .number
-        }
+    // isValidCardSelection, isValidEquation, and calculateEquationResult(from:)
+    // have been moved to EquationHighLowEngine.
+    // The ViewModel will rely on the engine for these logic pieces.
+    
+    // placeBid() method in ViewModel:
+    // The engine has `placeBid()`. The ViewModel should have a corresponding method.
+    // This was removed in a previous step due to `isHigh` parameter, but a simple passthrough is needed.
+    func placeBid() {
+        engine.placeBid()
     }
     
-    private func isValidEquation() -> Bool {
-        // Check if we have a valid equation (number-operator-number pattern)
-        guard selectedCards.count >= 3 else { return false }
-        
-        let isValidPattern = selectedCards.enumerated().allSatisfy { index, card in
-            if index % 2 == 0 {
-                return card.type == .number
-            } else {
-                return card.type == .operator
-            }
-        }
-        
-        return isValidPattern && selectedCards.count % 2 == 1
-    }
-    
-    private func calculateEquationResult() -> Double? {
-        guard isValidEquation() else { return nil }
-        
-        var result = selectedCards[0].value
-        
-        for i in stride(from: 1, to: selectedCards.count - 1, by: 2) {
-            let operation = selectedCards[i].operation!
-            let nextNumber = selectedCards[i + 1].value
-            
-            switch operation {
-            case .add:
-                result += nextNumber
-            case .subtract:
-                result -= nextNumber
-            case .multiply:
-                result *= nextNumber
-            case .divide:
-                guard nextNumber != 0 else { return nil }
-                result /= nextNumber
-            }
-        }
-        
-        return result
-    }
-    
-    func placeBid(isHigh: Bool) {
-        guard let result = currentEquationResult else { return }
-        
-        let bid = Bid(
-            playerId: gameService.currentPlayerId,
-            amount: bidAmount,
-            targetHigh: isHigh,
-            equationResult: result
-        )
-        
-        gameService.submitBid(bid)
-    }
-    
-    private func determineRoundWinner() {
-        gameService.determineRoundWinner()
-    }
-    
-    private func handleGameEnd() {
-        // Handle game end state, show final results
-    }
+    // placeBid(isHigh: Bool) was removed.
+    // ViewModel should call engine.placeBid().
+    // The engine's placeBid() uses its own bidAmount.
+    // The concept of "isHigh" or a specific target for a bid needs to be reconciled
+    // with how engine.evaluateRound() uses player.targetNumber.
+    // For now, the ViewModel will only trigger the engine's existing placeBid().
+    // If player.targetNumber needs to be set, it would be a separate action via the engine.
+
+    // determineRoundWinner() and handleGameEnd() were stubs calling gameService,
+    // these are responsibilities of the engine.
 }
 
 // MARK: - Game Models
-enum GameState {
-    case waitingForPlayers
-    case playing
-    case roundEnded
-    case gameEnded
-}
-
-struct Player: Identifiable {
-    let id: String
-    var chips: Int
-    var isEliminated: Bool
-}
-
-struct Bid {
-    let playerId: String
-    let amount: Int
-    let targetHigh: Bool
-    let equationResult: Double
-}
-
-enum CardType {
-    case number
-    case operator
-}
-
-enum Operation {
-    case add
-    case subtract
-    case multiply
-    case divide
-}
-
-struct EquationCard: Identifiable {
-    let id = UUID()
-    let type: CardType
-    let value: Double
-    let display: String
-    var operation: Operation?
-} 
+// GameState, Player, EquationCard, CardType, Operation models 
+// are now sourced from EquationHighLowModels.swift.
+// The Bid struct, as previously used here, is considered obsolete.

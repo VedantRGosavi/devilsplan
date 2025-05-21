@@ -3,7 +3,7 @@ import Clerk
 
 struct EquationHighLowView: GameView {
     let game: Game
-    @StateObject var engine: EquationHighLowEngine
+    @StateObject var engine: EquationHighLowEngine // Will be initialized in custom init
     @Environment(Clerk.self) private var clerk
     @Environment(\.dismiss) private var dismiss
     @State var showingTutorial = true
@@ -136,15 +136,20 @@ struct EquationHighLowView: GameView {
         
         do {
             if let progress = try await GameProgressService.shared.loadGameProgress(userId: userId, gameId: game.id) {
-                // Initialize the game engine with the saved progress
-                // Note: For multiplayer games, we might want to handle this differently
+                // TODO: Multiplayer Progress Loading Limitation:
+                // The current logic loads a player's saved progress (level, score) when the game view appears.
+                // This is primarily effective for single-player mode or when starting a new game.
+                // In multiplayer games, if a player reconnects or joins an ongoing session, this loaded progress
+                // might conflict with, or be immediately overwritten by, the synchronized game state received from the host.
+                // A robust feature for rejoining active multiplayer games with consistent progress is not currently implemented.
                 if progress.status == "in_progress" {
+                    // This initialization might be overwritten by host state in multiplayer.
                     engine.currentLevel = progress.currentLevel
                     engine.score = progress.score
                 }
             }
         } catch {
-            print("Failed to load game progress: \(error)")
+            AppLogger.error("Failed to load game progress for game \(game.id), user \(userId): \(error)")
         }
         
         isLoadingProgress = false
@@ -158,7 +163,9 @@ struct EquationHighLowView: GameView {
             do {
                 try await engine.updateGameProgress(userId: userId)
             } catch {
-                print("Failed to update game progress: \(error)")
+                // Assuming engine.gameId is accessible; if not, game.id from the view's property could be used.
+                // For this context, using game.id as it's definitely available.
+                AppLogger.error("Failed to update game progress for game \(game.id), user \(userId): \(error)")
             }
             
             DispatchQueue.main.async {
@@ -245,9 +252,29 @@ struct PlayerStatsView: View {
 }
 
 #Preview {
-    EquationHighLowView(
-        game: Game(id: "3", name: "Equation High-Low", description: "Build equations to win", levels: 1, maxScore: 1000),
-        engine: EquationHighLowEngine()
-    )
+    struct PreviewGameNetworkingService: GameNetworkingService {
+        var localPlayerId: String = "previewPlayer"
+        func startAdvertising() {}
+        func startBrowsing() {}
+        func sendData<T: Codable>(_ data: T, type: String) {}
+        func disconnect() {}
+        func setEngineReference(_ engine: EquationHighLowEngine) {}
+    }
+
+    static let previewGame = Game(id: "preview_eq_hl", name: "Equation High-Low", description: "Build equations to win", levels: 1, maxScore: 1000)
+    // Required for engine initialization
+    static var previewGameNetworkingService: GameNetworkingService = PreviewGameNetworkingService()
+
+    init(game: Game) {
+        self.game = game
+        // Note: This assumes EquationHighLowGameService can be default initialized.
+        // If it requires parameters, this initialization needs to be adjusted or the service injected.
+        let gameService = EquationHighLowGameService()
+        let engineInstance = EquationHighLowEngine(gameNetworkingService: gameService, gameId: game.id)
+        gameService.setEngineReference(engineInstance)
+        self._engine = StateObject(wrappedValue: engineInstance)
+    }
+    
+    return EquationHighLowView(game: previewGame) // Uses the init that creates the engine
     .environment(Clerk())
-} 
+}
